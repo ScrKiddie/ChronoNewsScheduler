@@ -92,9 +92,10 @@ func RunScheduler(ctx context.Context, cfg SchedulerConfig) {
 	cpuTimeBefore := cpuTimesBefore.User + cpuTimesBefore.System
 
 	doneMonitoring := make(chan struct{})
-	var peakRAM uint64
+	resultChan := make(chan uint64, 1)
+
 	go func() {
-		peakRAM = monitorPeakRAM(p, doneMonitoring)
+		resultChan <- monitorPeakRAM(p, doneMonitoring)
 	}()
 
 	if cfg.IsConcurrent {
@@ -104,6 +105,8 @@ func RunScheduler(ctx context.Context, cfg SchedulerConfig) {
 	}
 
 	close(doneMonitoring)
+	peakRAM := <-resultChan
+
 	duration := time.Since(startTime)
 	cpuTimesAfter, _ := p.Times()
 	cpuTimeAfter := cpuTimesAfter.User + cpuTimesAfter.System
