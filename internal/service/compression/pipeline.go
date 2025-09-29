@@ -1,4 +1,4 @@
-package service
+package compression
 
 import (
 	"chrononews-scheduler/internal/model"

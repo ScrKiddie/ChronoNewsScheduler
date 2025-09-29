@@ -4,6 +4,7 @@ import (
 	"chrononews-scheduler/internal/config"
 	"chrononews-scheduler/internal/database"
 	"chrononews-scheduler/internal/service"
+	"chrononews-scheduler/internal/service/compression"
 	"context"
 	"log/slog"
 	"os"
@@ -43,7 +44,7 @@ func main() {
 
 	database.ConnectDB(appCfg.DSN)
 
-	schedulerCfg := service.SchedulerConfig{
+	schedulerCfg := compression.SchedulerConfig{
 		BatchSize:     appCfg.BatchSize,
 		SourceDir:     appCfg.SourceDir,
 		DestDir:       appCfg.DestDir,
@@ -58,7 +59,7 @@ func main() {
 	}
 
 	slog.Info("Aplikasi dimulai dengan konfigurasi dari environment variables",
-		slog.Group("scheduler",
+		slog.Group("compression_settings",
 			slog.Bool("concurrent", schedulerCfg.IsConcurrent),
 			slog.Bool("test_mode", schedulerCfg.IsTestMode),
 			slog.Int("batch_size", schedulerCfg.BatchSize),
@@ -73,36 +74,68 @@ func main() {
 			slog.Int("max_width", schedulerCfg.MaxWidth),
 			slog.Int("max_height", schedulerCfg.MaxHeight),
 		),
-		slog.String("schedule", appCfg.Schedule),
+		slog.Group("schedules",
+			slog.String("compression", appCfg.CompressionSchedule),
+			slog.String("cleanup", appCfg.CleanupSchedule),
+			slog.String("janitor", appCfg.JanitorSchedule),
+		),
+		slog.Group("thresholds",
+			slog.String("cleanup_older_than", appCfg.CleanupThreshold.String()),
+			slog.String("janitor_stuck_after", appCfg.JanitorStuckThreshold.String()),
+		),
 		slog.String("log_level", appCfg.LogLevel),
 	)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	if appCfg.Schedule != "" {
-		slog.Info("Memulai dalam mode terjadwal", "schedule", appCfg.Schedule)
+	if appCfg.CompressionSchedule != "" || appCfg.CleanupSchedule != "" || appCfg.JanitorSchedule != "" {
 		c := cron.New()
-		_, err := c.AddFunc(appCfg.Schedule, func() {
-			slog.Info("Cron job terpicu, menjalankan tugas kompresi.")
-			jobCtx, jobCancel := context.WithCancel(ctx)
-			defer jobCancel()
-			service.RunScheduler(jobCtx, schedulerCfg)
-		})
-		if err != nil {
-			slog.Error("Tidak dapat menambahkan cron job", "error", err)
-			os.Exit(1)
-		}
-		c.Start()
 
+		if appCfg.CompressionSchedule != "" {
+			slog.Info("Menjadwalkan Compression runner", "schedule", appCfg.CompressionSchedule)
+			_, err := c.AddFunc(appCfg.CompressionSchedule, func() {
+				slog.Info("Cron job kompresi terpicu.")
+				jobCtx, jobCancel := context.WithCancel(ctx)
+				defer jobCancel()
+				compression.RunScheduler(jobCtx, schedulerCfg)
+			})
+			if err != nil {
+				slog.Error("Tidak dapat menambahkan cron job kompresi", "error", err)
+				os.Exit(1)
+			}
+		}
+
+		if appCfg.CleanupSchedule != "" {
+			slog.Info("Menjadwalkan Cleanup runner", "schedule", appCfg.CleanupSchedule)
+			_, err := c.AddFunc(appCfg.CleanupSchedule, func() {
+				slog.Info("Cron job cleanup terpicu.")
+				service.RunCleanupScheduler(appCfg.DestDir, appCfg.CleanupThreshold)
+			})
+			if err != nil {
+				slog.Error("Tidak dapat menambahkan cron job cleanup", "error", err)
+				os.Exit(1)
+			}
+		}
+
+		if appCfg.JanitorSchedule != "" {
+			slog.Info("Menjadwalkan Janitor runner", "schedule", appCfg.JanitorSchedule)
+			_, err := c.AddFunc(appCfg.JanitorSchedule, func() {
+				slog.Info("Cron job janitor terpicu.")
+				service.RunJanitorScheduler(appCfg.JanitorStuckThreshold)
+			})
+			if err != nil {
+				slog.Error("Tidak dapat menambahkan cron job janitor", "error", err)
+				os.Exit(1)
+			}
+		}
+
+		c.Start()
 		slog.Info("Scheduler berjalan. Tekan Ctrl+C untuk berhenti.")
 		<-ctx.Done()
 
 		slog.Info("Sinyal berhenti diterima, menghentikan scheduler...")
 		c.Stop()
 		slog.Info("Scheduler berhenti.")
-	} else {
-		slog.Info("Memulai dalam mode eksekusi tunggal.")
-		service.RunScheduler(ctx, schedulerCfg)
 	}
 }

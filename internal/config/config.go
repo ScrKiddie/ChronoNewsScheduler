@@ -6,6 +6,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/joho/godotenv"
 )
@@ -13,20 +14,24 @@ import (
 const webpMaxDimension = 16383
 
 type Config struct {
-	DSN           string
-	LogLevel      string
-	IsConcurrent  bool
-	IsTestMode    bool
-	BatchSize     int
-	SourceDir     string
-	DestDir       string
-	Schedule      string
-	NumIOWorkers  int
-	NumCPUWorkers int
-	WebPQuality   int
-	MaxWidth      int
-	MaxHeight     int
-	MaxRetries    int
+	DSN                   string
+	LogLevel              string
+	IsConcurrent          bool
+	IsTestMode            bool
+	BatchSize             int
+	SourceDir             string
+	DestDir               string
+	CompressionSchedule   string
+	NumIOWorkers          int
+	NumCPUWorkers         int
+	WebPQuality           int
+	MaxWidth              int
+	MaxHeight             int
+	MaxRetries            int
+	CleanupSchedule       string
+	CleanupThreshold      time.Duration
+	JanitorSchedule       string
+	JanitorStuckThreshold time.Duration
 }
 
 func getEnv(key, fallback string) string {
@@ -35,7 +40,6 @@ func getEnv(key, fallback string) string {
 	}
 	return fallback
 }
-
 func getEnvAsInt(key string, fallback int) (int, error) {
 	strValue := getEnv(key, "")
 	if strValue == "" {
@@ -58,6 +62,17 @@ func getEnvAsBool(key string, fallback bool) (bool, error) {
 	}
 	return value, nil
 }
+func getEnvAsDuration(key string, fallback time.Duration) (time.Duration, error) {
+	strValue := getEnv(key, "")
+	if strValue == "" {
+		return fallback, nil
+	}
+	value, err := time.ParseDuration(strValue)
+	if err != nil {
+		return 0, fmt.Errorf("env var %s: invalid duration value '%s' (e.g., '720h', '30m')", key, strValue)
+	}
+	return value, nil
+}
 
 func LoadConfig() (*Config, error) {
 	_ = godotenv.Load()
@@ -74,36 +89,44 @@ func LoadConfig() (*Config, error) {
 	)
 
 	cfg.LogLevel = getEnv("LOG_LEVEL", "info")
-	cfg.Schedule = getEnv("SCHEDULE", "")
-	cfg.SourceDir = getEnv("SOURCE_DIR", "./images/source")
-	cfg.DestDir = getEnv("DEST_DIR", "./images/compressed")
 
-	if cfg.IsTestMode, err = getEnvAsBool("IS_TEST_MODE", false); err != nil {
+	cfg.CompressionSchedule = getEnv("COMPRESSION_SCHEDULE", "")
+	cfg.SourceDir = getEnv("COMPRESSION_SOURCE_DIR", "./images/source")
+	cfg.DestDir = getEnv("COMPRESSION_DEST_DIR", "./images/compressed")
+	if cfg.IsTestMode, err = getEnvAsBool("COMPRESSION_IS_TEST_MODE", false); err != nil {
+		return nil, err
+	}
+	if cfg.MaxRetries, err = getEnvAsInt("COMPRESSION_MAX_RETRIES", 3); err != nil {
+		return nil, err
+	}
+	if cfg.IsConcurrent, err = getEnvAsBool("COMPRESSION_IS_CONCURRENT", true); err != nil {
+		return nil, err
+	}
+	if cfg.BatchSize, err = getEnvAsInt("COMPRESSION_BATCH_SIZE", 50); err != nil {
+		return nil, err
+	}
+	if cfg.NumIOWorkers, err = getEnvAsInt("COMPRESSION_NUM_IO_WORKERS", runtime.NumCPU()*2); err != nil {
+		return nil, err
+	}
+	if cfg.NumCPUWorkers, err = getEnvAsInt("COMPRESSION_NUM_CPU_WORKERS", runtime.NumCPU()); err != nil {
+		return nil, err
+	}
+	if cfg.WebPQuality, err = getEnvAsInt("COMPRESSION_WEBP_QUALITY", 75); err != nil {
+		return nil, err
+	}
+	if cfg.MaxWidth, err = getEnvAsInt("COMPRESSION_MAX_WIDTH", 1980); err != nil {
+		return nil, err
+	}
+	if cfg.MaxHeight, err = getEnvAsInt("COMPRESSION_MAX_HEIGHT", 1980); err != nil {
 		return nil, err
 	}
 
-	if cfg.IsConcurrent, err = getEnvAsBool("IS_CONCURRENT", true); err != nil {
+	cfg.CleanupSchedule = getEnv("CLEANUP_SCHEDULE", "")
+	if cfg.CleanupThreshold, err = getEnvAsDuration("CLEANUP_THRESHOLD", 30*24*time.Hour); err != nil {
 		return nil, err
 	}
-	if cfg.BatchSize, err = getEnvAsInt("BATCH_SIZE", 50); err != nil {
-		return nil, err
-	}
-	if cfg.NumIOWorkers, err = getEnvAsInt("NUM_IO_WORKERS", runtime.NumCPU()*2); err != nil {
-		return nil, err
-	}
-	if cfg.NumCPUWorkers, err = getEnvAsInt("NUM_CPU_WORKERS", runtime.NumCPU()); err != nil {
-		return nil, err
-	}
-	if cfg.MaxRetries, err = getEnvAsInt("MAX_RETRIES", 3); err != nil {
-		return nil, err
-	}
-	if cfg.WebPQuality, err = getEnvAsInt("WEBP_QUALITY", 75); err != nil {
-		return nil, err
-	}
-	if cfg.MaxWidth, err = getEnvAsInt("MAX_WIDTH", 1980); err != nil {
-		return nil, err
-	}
-	if cfg.MaxHeight, err = getEnvAsInt("MAX_HEIGHT", 1980); err != nil {
+	cfg.JanitorSchedule = getEnv("JANITOR_SCHEDULE", "")
+	if cfg.JanitorStuckThreshold, err = getEnvAsDuration("JANITOR_STUCK_THRESHOLD", 15*time.Minute); err != nil {
 		return nil, err
 	}
 
@@ -136,7 +159,12 @@ func validateConfig(cfg *Config) error {
 	if cfg.MaxRetries < 0 {
 		return fmt.Errorf("MAX_RETRIES tidak boleh negatif")
 	}
-
+	if cfg.CleanupThreshold <= 0 {
+		return fmt.Errorf("CLEANUP_THRESHOLD harus durasi positif")
+	}
+	if cfg.JanitorStuckThreshold <= 0 {
+		return fmt.Errorf("JANITOR_STUCK_THRESHOLD harus durasi positif")
+	}
 	for _, dir := range []string{cfg.SourceDir, cfg.DestDir} {
 		info, err := os.Stat(dir)
 		if os.IsNotExist(err) {
@@ -149,11 +177,9 @@ func validateConfig(cfg *Config) error {
 			return fmt.Errorf("path '%s' bukanlah sebuah direktori", dir)
 		}
 	}
-
 	validLogLevels := map[string]bool{"DEBUG": true, "INFO": true, "WARN": true, "ERROR": true}
 	if !validLogLevels[strings.ToUpper(cfg.LogLevel)] {
 		return fmt.Errorf("LOG_LEVEL tidak valid: '%s'. Gunakan salah satu dari: debug, info, warn, error", cfg.LogLevel)
 	}
-
 	return nil
 }
