@@ -14,7 +14,6 @@ ChronoNewsScheduler is a robust background job processor built with Go. Designed
 - **Highly Configurable**: All functionalities are easily configured through environment variables.
 - **Structured Logging**: Provides clear, structured logs for easy monitoring and debugging.
 
-
 ## Architecture Diagram
 
 ```mermaid
@@ -49,6 +48,10 @@ graph TD
     CleanupScheduler -- "2. Deletes physical file" --> FS
     CleanupScheduler -- "3. Deletes file record" --> DB
 ```
+
+## Dependencies
+
+To run this project, your only required system dependency is the `libvips` library. The Go bindings included in this repository were pre-generated using the [vipsgen](https://github.com/cshum/vipsgen) tool and are specifically tailored for **`libvips` version `8.12.1`**. This ensures the project works out-of-the-box if you have the same version installed. If you need to use a different version of `libvips` or wish to customize the bindings, you can easily regenerate them yourself by running the `vipsgen` tool again from the project's root directory. Otherwise, simply install the matching `libvips` version, run `go mod tidy`, and you are ready to go.
 ## Configuration
 
 All application settings are managed via an `.env` file. Create one based on `.env.example`.

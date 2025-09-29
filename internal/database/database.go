@@ -16,5 +16,5 @@ func ConnectDB(dsn string) {
 	if err != nil {
 		log.Fatalf("Gagal terhubung ke database: %v", err)
 	}
-	slog.Info("Koneksi database berhasil dan migrasi skema selesai.")
+	slog.Info("Koneksi database berhasil.")
 }
