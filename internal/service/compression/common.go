@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"math"
 	"path/filepath"
+	"strings"
 
 	"gorm.io/gorm"
 )
@@ -26,6 +27,9 @@ func handleSuccess(task model.File, cfg SchedulerConfig) {
 		return
 	}
 
+	originalNameWithoutExt := strings.TrimSuffix(task.Name, filepath.Ext(task.Name))
+	newWebPFileName := fmt.Sprintf("%s.webp", originalNameWithoutExt)
+
 	sourceFilePath := filepath.Join(cfg.SourceDir, task.Name)
 	deletionEntry := model.SourceFileToDelete{
 		FileID:     task.ID,
@@ -36,6 +40,7 @@ func handleSuccess(task model.File, cfg SchedulerConfig) {
 		if err := tx.Model(&task).Updates(map[string]interface{}{
 			"status":     "compressed",
 			"last_error": nil,
+			"name":       newWebPFileName,
 		}).Error; err != nil {
 			return err
 		}
