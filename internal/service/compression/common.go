@@ -8,6 +8,9 @@ import (
 	"io"
 	"log/slog"
 	"math"
+	"path/filepath"
+
+	"gorm.io/gorm"
 )
 
 func calculateOptimalScale(w, h int, maxWidth, maxHeight int) float64 {
@@ -23,13 +26,29 @@ func handleSuccess(task model.File, cfg SchedulerConfig) {
 		return
 	}
 
-	err := database.DB.Model(&task).Updates(map[string]interface{}{
-		"status":     "compressed",
-		"last_error": nil,
-	}).Error
+	sourceFilePath := filepath.Join(cfg.SourceDir, task.Name)
+	deletionEntry := model.SourceFileToDelete{
+		FileID:     task.ID,
+		SourcePath: sourceFilePath,
+	}
+
+	err := database.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&task).Updates(map[string]interface{}{
+			"status":     "compressed",
+			"last_error": nil,
+		}).Error; err != nil {
+			return err
+		}
+
+		if err := tx.Create(&deletionEntry).Error; err != nil {
+			return err
+		}
+
+		return nil
+	})
 
 	if err != nil {
-		slog.Error("KRITIS: Gagal update status sukses", "task_id", task.ID, "error", err)
+		slog.Error("KRITIS: Gagal menyelesaikan transaksi sukses kompresi", "task_id", task.ID, "error", err)
 	}
 }
 

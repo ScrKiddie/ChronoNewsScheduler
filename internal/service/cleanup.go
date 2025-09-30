@@ -13,8 +13,8 @@ import (
 	"gorm.io/gorm"
 )
 
-func RunCleanupScheduler(destDir string, threshold time.Duration) {
-	slog.Info("Memulai scheduler cleanup...")
+func RunCleanupOldCompressedFiles(destDir string, threshold time.Duration, batchSize int) {
+	slog.Info("Memulai scheduler cleanup untuk file .webp lama...", "batch_size", batchSize)
 
 	thresholdTime := time.Now().Add(-threshold)
 	unixThreshold := thresholdTime.Unix()
@@ -25,17 +25,19 @@ func RunCleanupScheduler(destDir string, threshold time.Duration) {
 	var failedToDeleteFileCount int
 
 	err := database.DB.Transaction(func(tx *gorm.DB) error {
-		err := tx.Where("used_by_post_id IS NULL AND created_at < ?", unixThreshold).Find(&filesToDelete).Error
+		err := tx.Where("used_by_post_id IS NULL AND created_at < ?", unixThreshold).
+			Limit(batchSize).
+			Find(&filesToDelete).Error
 		if err != nil {
-			return fmt.Errorf("gagal mencari file untuk dihapus: %w", err)
+			return fmt.Errorf("gagal mencari file .webp untuk dihapus: %w", err)
 		}
 
 		if len(filesToDelete) == 0 {
-			slog.Info("Cleanup: Tidak ada file lama yang tidak terpakai untuk dihapus.")
+			slog.Info("Cleanup .webp: Tidak ada file lama yang tidak terpakai untuk dihapus.")
 			return nil
 		}
 
-		slog.Info(fmt.Sprintf("Cleanup: Ditemukan %d file untuk dihapus.", len(filesToDelete)))
+		slog.Info(fmt.Sprintf("Cleanup .webp: Ditemukan %d file untuk dihapus.", len(filesToDelete)))
 
 		var idsToDelete []int32
 		for _, file := range filesToDelete {
@@ -46,9 +48,9 @@ func RunCleanupScheduler(destDir string, threshold time.Duration) {
 			err := os.Remove(filePath)
 			if err != nil {
 				if os.IsNotExist(err) {
-					slog.Warn("Cleanup: File sudah tidak ada di disk, akan tetap menghapus record DB", "file", filePath)
+					slog.Warn("Cleanup .webp: File sudah tidak ada di disk, akan tetap menghapus record DB", "file", filePath)
 				} else {
-					slog.Error("Cleanup: Gagal menghapus file dari disk", "file", filePath, "error", err)
+					slog.Error("Cleanup .webp: Gagal menghapus file dari disk", "file", filePath, "error", err)
 					failedToDeleteFileCount++
 					continue
 				}
@@ -57,14 +59,14 @@ func RunCleanupScheduler(destDir string, threshold time.Duration) {
 		}
 
 		if len(idsToDelete) == 0 {
-			slog.Warn("Cleanup: Tidak ada record database yang akan dihapus setelah proses penghapusan file.")
+			slog.Warn("Cleanup .webp: Tidak ada record database yang akan dihapus setelah proses penghapusan file.")
 			return nil
 		}
-		
+
 		result := tx.Where("id IN ?", idsToDelete).Delete(&model.File{})
 		if result.Error != nil {
 			failedToDeleteDbCount = len(filesToDelete) - int(result.RowsAffected)
-			return fmt.Errorf("gagal menghapus record file dari database: %w", result.Error)
+			return fmt.Errorf("gagal menghapus record file .webp dari database: %w", result.Error)
 		}
 
 		deletedCount = int(result.RowsAffected)
@@ -72,13 +74,54 @@ func RunCleanupScheduler(destDir string, threshold time.Duration) {
 	})
 
 	if err != nil {
-		slog.Error("Scheduler cleanup gagal dengan error", "error", err)
+		slog.Error("Scheduler cleanup .webp gagal dengan error", "error", err)
 	}
 
-	slog.Info("Scheduler cleanup selesai.",
+	slog.Info("Scheduler cleanup .webp selesai.",
 		"total_ditemukan", len(filesToDelete),
 		"berhasil_dihapus", deletedCount,
 		"gagal_hapus_file", failedToDeleteFileCount,
 		"gagal_hapus_db", failedToDeleteDbCount,
 	)
+}
+
+func ProcessSourceFileDeletionQueue(batchSize int, maxRetries int) {
+	slog.Info("Memulai scheduler untuk antrean penghapusan file sumber...", "batch_size", batchSize, "max_retries", maxRetries)
+	db := database.DB
+
+	var entries []model.SourceFileToDelete
+	err := db.Where("failed_attempts < ?", maxRetries).
+		Limit(batchSize).
+		Find(&entries).Error
+	if err != nil {
+		slog.Error("Gagal mengambil tugas dari antrean penghapusan", "error", err)
+		return
+	}
+
+	if len(entries) == 0 {
+		slog.Info("Antrean penghapusan file sumber kosong.")
+		return
+	}
+
+	var successCount, failedCount int
+	for _, entry := range entries {
+		err := os.Remove(entry.SourcePath)
+		if err == nil || os.IsNotExist(err) {
+			if err != nil {
+				slog.Warn("Antrean Hapus: File sumber sudah tidak ada di disk, menghapus dari antrean", "path", entry.SourcePath)
+			}
+			db.Delete(&entry)
+			successCount++
+		} else {
+			slog.Error("Antrean Hapus: Gagal menghapus file sumber", "path", entry.SourcePath, "error", err)
+			errorMessage := err.Error()
+			db.Model(&entry).Updates(map[string]interface{}{
+				"failed_attempts": gorm.Expr("failed_attempts + 1"),
+				"last_error":      &errorMessage,
+			})
+			failedCount++
+		}
+	}
+
+	slog.Info("Scheduler antrean penghapusan selesai.", "berhasil_diproses", successCount, "gagal_diproses", failedCount)
 }

@@ -59,29 +59,11 @@ func main() {
 	}
 
 	slog.Info("Aplikasi dimulai dengan konfigurasi dari environment variables",
-		slog.Group("compression_settings",
-			slog.Bool("concurrent", schedulerCfg.IsConcurrent),
-			slog.Bool("test_mode", schedulerCfg.IsTestMode),
-			slog.Int("batch_size", schedulerCfg.BatchSize),
-			slog.Int("io_workers", schedulerCfg.NumIOWorkers),
-			slog.Int("cpu_workers", schedulerCfg.NumCPUWorkers),
-			slog.Int("max_retries", schedulerCfg.MaxRetries),
-			slog.String("source_dir", schedulerCfg.SourceDir),
-			slog.String("destination_dir", schedulerCfg.DestDir),
-		),
-		slog.Group("image_processing",
-			slog.Int("webp_quality", schedulerCfg.WebPQuality),
-			slog.Int("max_width", schedulerCfg.MaxWidth),
-			slog.Int("max_height", schedulerCfg.MaxHeight),
-		),
 		slog.Group("schedules",
 			slog.String("compression", appCfg.CompressionSchedule),
-			slog.String("cleanup", appCfg.CleanupSchedule),
-			slog.String("janitor", appCfg.JanitorSchedule),
-		),
-		slog.Group("thresholds",
-			slog.String("cleanup_older_than", appCfg.CleanupThreshold.String()),
-			slog.String("janitor_stuck_after", appCfg.JanitorStuckThreshold.String()),
+			slog.String("cleanup_old_webp", appCfg.CleanupSchedule),
+			slog.String("janitor_stuck_tasks", appCfg.JanitorSchedule),
+			slog.String("deletion_queue_source_files", appCfg.DeletionQueueSchedule),
 		),
 		slog.String("log_level", appCfg.LogLevel),
 	)
@@ -89,7 +71,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	if appCfg.CompressionSchedule != "" || appCfg.CleanupSchedule != "" || appCfg.JanitorSchedule != "" {
+	if appCfg.CompressionSchedule != "" || appCfg.CleanupSchedule != "" || appCfg.JanitorSchedule != "" || appCfg.DeletionQueueSchedule != "" {
 		c := cron.New()
 
 		if appCfg.CompressionSchedule != "" {
@@ -107,10 +89,14 @@ func main() {
 		}
 
 		if appCfg.CleanupSchedule != "" {
-			slog.Info("Menjadwalkan Cleanup runner", "schedule", appCfg.CleanupSchedule)
+			slog.Info("Menjadwalkan Cleanup runner untuk file .webp lama", "schedule", appCfg.CleanupSchedule)
 			_, err := c.AddFunc(appCfg.CleanupSchedule, func() {
-				slog.Info("Cron job cleanup terpicu.")
-				service.RunCleanupScheduler(appCfg.DestDir, appCfg.CleanupThreshold)
+				slog.Info("Cron job cleanup .webp terpicu.")
+				service.RunCleanupOldCompressedFiles(
+					appCfg.DestDir,
+					appCfg.CleanupThreshold,
+					appCfg.CleanupBatchSize,
+				)
 			})
 			if err != nil {
 				slog.Error("Tidak dapat menambahkan cron job cleanup", "error", err)
@@ -130,6 +116,21 @@ func main() {
 			}
 		}
 
+		if appCfg.DeletionQueueSchedule != "" {
+			slog.Info("Menjadwalkan proses antrean penghapusan file sumber", "schedule", appCfg.DeletionQueueSchedule)
+			_, err := c.AddFunc(appCfg.DeletionQueueSchedule, func() {
+				slog.Info("Cron job antrean penghapusan file sumber terpicu.")
+				service.ProcessSourceFileDeletionQueue(
+					appCfg.DeletionQueueBatchSize,
+					appCfg.DeletionQueueMaxRetries,
+				)
+			})
+			if err != nil {
+				slog.Error("Tidak dapat menambahkan cron job antrean penghapusan", "error", err)
+				os.Exit(1)
+			}
+		}
+
 		c.Start()
 		slog.Info("Scheduler berjalan. Tekan Ctrl+C untuk berhenti.")
 		<-ctx.Done()
@@ -137,5 +138,7 @@ func main() {
 		slog.Info("Sinyal berhenti diterima, menghentikan scheduler...")
 		c.Stop()
 		slog.Info("Scheduler berhenti.")
+	} else {
+		slog.Info("Tidak ada jadwal yang dikonfigurasi. Aplikasi akan keluar.")
 	}
 }

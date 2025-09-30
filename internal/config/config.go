@@ -14,24 +14,28 @@ import (
 const webpMaxDimension = 16383
 
 type Config struct {
-	DSN                   string
-	LogLevel              string
-	IsConcurrent          bool
-	IsTestMode            bool
-	BatchSize             int
-	SourceDir             string
-	DestDir               string
-	CompressionSchedule   string
-	NumIOWorkers          int
-	NumCPUWorkers         int
-	WebPQuality           int
-	MaxWidth              int
-	MaxHeight             int
-	MaxRetries            int
-	CleanupSchedule       string
-	CleanupThreshold      time.Duration
-	JanitorSchedule       string
-	JanitorStuckThreshold time.Duration
+	DSN                     string
+	LogLevel                string
+	IsConcurrent            bool
+	IsTestMode              bool
+	BatchSize               int
+	SourceDir               string
+	DestDir                 string
+	CompressionSchedule     string
+	NumIOWorkers            int
+	NumCPUWorkers           int
+	WebPQuality             int
+	MaxWidth                int
+	MaxHeight               int
+	MaxRetries              int
+	CleanupSchedule         string
+	CleanupThreshold        time.Duration
+	CleanupBatchSize        int
+	JanitorSchedule         string
+	JanitorStuckThreshold   time.Duration
+	DeletionQueueSchedule   string
+	DeletionQueueBatchSize  int
+	DeletionQueueMaxRetries int
 }
 
 func getEnv(key, fallback string) string {
@@ -125,8 +129,20 @@ func LoadConfig() (*Config, error) {
 	if cfg.CleanupThreshold, err = getEnvAsDuration("CLEANUP_THRESHOLD", 30*24*time.Hour); err != nil {
 		return nil, err
 	}
+	if cfg.CleanupBatchSize, err = getEnvAsInt("CLEANUP_BATCH_SIZE", 100); err != nil {
+		return nil, err
+	}
+
 	cfg.JanitorSchedule = getEnv("JANITOR_SCHEDULE", "")
 	if cfg.JanitorStuckThreshold, err = getEnvAsDuration("JANITOR_STUCK_THRESHOLD", 15*time.Minute); err != nil {
+		return nil, err
+	}
+
+	cfg.DeletionQueueSchedule = getEnv("DELETION_QUEUE_SCHEDULE", "")
+	if cfg.DeletionQueueBatchSize, err = getEnvAsInt("DELETION_QUEUE_BATCH_SIZE", 100); err != nil {
+		return nil, err
+	}
+	if cfg.DeletionQueueMaxRetries, err = getEnvAsInt("DELETION_QUEUE_MAX_RETRIES", 5); err != nil {
 		return nil, err
 	}
 
@@ -162,9 +178,19 @@ func validateConfig(cfg *Config) error {
 	if cfg.CleanupThreshold <= 0 {
 		return fmt.Errorf("CLEANUP_THRESHOLD harus durasi positif")
 	}
+	if cfg.CleanupBatchSize <= 0 {
+		return fmt.Errorf("CLEANUP_BATCH_SIZE harus lebih besar dari 0")
+	}
 	if cfg.JanitorStuckThreshold <= 0 {
 		return fmt.Errorf("JANITOR_STUCK_THRESHOLD harus durasi positif")
 	}
+	if cfg.DeletionQueueBatchSize <= 0 {
+		return fmt.Errorf("DELETION_QUEUE_BATCH_SIZE harus lebih besar dari 0")
+	}
+	if cfg.DeletionQueueMaxRetries < 0 {
+		return fmt.Errorf("DELETION_QUEUE_MAX_RETRIES tidak boleh negatif")
+	}
+
 	for _, dir := range []string{cfg.SourceDir, cfg.DestDir} {
 		info, err := os.Stat(dir)
 		if os.IsNotExist(err) {
