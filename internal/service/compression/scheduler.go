@@ -121,7 +121,7 @@ func getTasksFromDB(ctx context.Context, cfg SchedulerConfig) []model.File {
 	err := database.DB.Transaction(func(tx *gorm.DB) error {
 		err := tx.Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"}).
 			WithContext(ctx).
-			Where("status = ? AND failed_attempts < ?", "pending", cfg.MaxRetries).
+			Where("status = ? AND failed_attempts < ? AND used_by_post_id IS NOT NULL", "pending", cfg.MaxRetries).
 			Limit(cfg.BatchSize).
 			Find(&tasks).Error
 

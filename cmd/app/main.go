@@ -61,7 +61,7 @@ func main() {
 	slog.Info("Aplikasi dimulai dengan konfigurasi dari environment variables",
 		slog.Group("schedules",
 			slog.String("compression", appCfg.CompressionSchedule),
-			slog.String("cleanup_old_webp", appCfg.CleanupSchedule),
+			slog.String("cleanup_unused", appCfg.CleanupSchedule),
 			slog.String("janitor_stuck_tasks", appCfg.JanitorSchedule),
 			slog.String("deletion_queue_source_files", appCfg.DeletionQueueSchedule),
 		),
@@ -89,10 +89,10 @@ func main() {
 		}
 
 		if appCfg.CleanupSchedule != "" {
-			slog.Info("Menjadwalkan Cleanup runner untuk file .webp lama", "schedule", appCfg.CleanupSchedule)
+			slog.Info("Menjadwalkan Cleanup runner untuk file yang lama tidak terpakai", "schedule", appCfg.CleanupSchedule)
 			_, err := c.AddFunc(appCfg.CleanupSchedule, func() {
-				slog.Info("Cron job cleanup .webp terpicu.")
-				service.RunCleanupOldCompressedFiles(
+				slog.Info("Cron job cleanup unused file terpicu.")
+				service.RunCleanupOldUnusedFiles(
 					appCfg.DestDir,
 					appCfg.CleanupThreshold,
 					appCfg.CleanupBatchSize,

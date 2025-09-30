@@ -48,7 +48,7 @@ graph TD
     JanitorScheduler -- "2. Resets status to 'pending'" --> DB
 
     CleanupScheduler -- "1. Finds old & unused file records" --> DB
-    CleanupScheduler -- "2. Deletes unused file (.webp)" --> FS
+    CleanupScheduler -- "2. Deletes unused file" --> FS
     CleanupScheduler -- "3. Deletes file record" --> DB
 
     DeletionQueueScheduler -- "1. Reads tasks from queue" --> DeletionQueue
