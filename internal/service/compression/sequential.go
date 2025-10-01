@@ -1,6 +1,7 @@
 package compression
 
 import (
+	"chrononews-scheduler/internal/config"
 	"chrononews-scheduler/internal/model"
 	"context"
 	"fmt"
@@ -10,7 +11,7 @@ import (
 	"path/filepath"
 )
 
-func runSequential(ctx context.Context, tasks []model.File, cfg SchedulerConfig) {
+func runSequential(ctx context.Context, tasks []model.File, cfg *config.Config) {
 	var successfulCount int
 	var failedCount int
 
@@ -43,7 +44,7 @@ func runSequential(ctx context.Context, tasks []model.File, cfg SchedulerConfig)
 	)
 }
 
-func compressImageStreaming(cfg SchedulerConfig, task model.File) error {
+func compressImageStreaming(cfg *config.Config, task model.File) error {
 	sourceFile := filepath.Join(cfg.SourceDir, task.Name)
 	file, err := os.Open(sourceFile)
 	if err != nil {

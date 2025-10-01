@@ -1,6 +1,7 @@
 package compression
 
 import (
+	"chrononews-scheduler/internal/config"
 	"chrononews-scheduler/internal/database"
 	"chrononews-scheduler/internal/model"
 	"chrononews-scheduler/vips"
@@ -21,7 +22,7 @@ func calculateOptimalScale(w, h int, maxWidth, maxHeight int) float64 {
 	return math.Min(float64(maxWidth)/float64(w), float64(maxHeight)/float64(h))
 }
 
-func handleSuccess(task model.File, cfg SchedulerConfig) {
+func handleSuccess(task model.File, cfg *config.Config) {
 	if cfg.IsTestMode {
 		slog.Debug("Mode Tes: Melewati pembaruan status 'compressed' di database.", "task_id", task.ID)
 		return
@@ -57,7 +58,7 @@ func handleSuccess(task model.File, cfg SchedulerConfig) {
 	}
 }
 
-func handleFailure(task model.File, err error, cfg SchedulerConfig) {
+func handleFailure(task model.File, err error, cfg *config.Config) {
 	if cfg.IsTestMode {
 		slog.Debug("Mode Tes: Melewati pembaruan status kegagalan di database.", "task_id", task.ID)
 		return
@@ -100,7 +101,7 @@ func handleFailure(task model.File, err error, cfg SchedulerConfig) {
 	}
 }
 
-func processImageWithReader(reader io.ReadCloser, cfg SchedulerConfig) (io.ReadCloser, error) {
+func processImageWithReader(reader io.ReadCloser, cfg *config.Config) (io.ReadCloser, error) {
 	pr, pw := io.Pipe()
 	go func() {
 		defer pw.Close()

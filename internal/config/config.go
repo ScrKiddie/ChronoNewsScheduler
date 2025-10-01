@@ -16,24 +16,22 @@ const webpMaxDimension = 16383
 type Config struct {
 	DSN                     string
 	LogLevel                string
+	AppMode                 string
+	AppSchedule             string
 	IsConcurrent            bool
 	IsTestMode              bool
 	BatchSize               int
 	SourceDir               string
 	DestDir                 string
-	CompressionSchedule     string
 	NumIOWorkers            int
 	NumCPUWorkers           int
 	WebPQuality             int
 	MaxWidth                int
 	MaxHeight               int
 	MaxRetries              int
-	CleanupSchedule         string
 	CleanupThreshold        time.Duration
 	CleanupBatchSize        int
-	JanitorSchedule         string
 	JanitorStuckThreshold   time.Duration
-	DeletionQueueSchedule   string
 	DeletionQueueBatchSize  int
 	DeletionQueueMaxRetries int
 }
@@ -84,6 +82,23 @@ func LoadConfig() (*Config, error) {
 	cfg := &Config{}
 	var err error
 
+	// --- Variabel Wajib Diisi ---
+	cfg.AppSchedule = getEnv("APP_SCHEDULE", "")
+	if cfg.AppSchedule == "" {
+		return nil, fmt.Errorf("environment variable wajib diisi: APP_SCHEDULE")
+	}
+
+	cfg.SourceDir = getEnv("COMPRESSION_SOURCE_DIR", "")
+	if cfg.SourceDir == "" {
+		return nil, fmt.Errorf("environment variable wajib diisi: COMPRESSION_SOURCE_DIR")
+	}
+
+	cfg.DestDir = getEnv("COMPRESSION_DEST_DIR", "")
+	if cfg.DestDir == "" {
+		return nil, fmt.Errorf("environment variable wajib diisi: COMPRESSION_DEST_DIR")
+	}
+	// --- Akhir Variabel Wajib Diisi ---
+
 	cfg.DSN = fmt.Sprintf("host=%s user=%s password=%s dbname=%s port=%s sslmode=disable TimeZone=Asia/Jakarta",
 		getEnv("DB_HOST", "localhost"),
 		getEnv("DB_USER", "user"),
@@ -93,10 +108,8 @@ func LoadConfig() (*Config, error) {
 	)
 
 	cfg.LogLevel = getEnv("LOG_LEVEL", "info")
+	cfg.AppMode = getEnv("APP_MODE", "all")
 
-	cfg.CompressionSchedule = getEnv("COMPRESSION_SCHEDULE", "")
-	cfg.SourceDir = getEnv("COMPRESSION_SOURCE_DIR", "./images/source")
-	cfg.DestDir = getEnv("COMPRESSION_DEST_DIR", "./images/compressed")
 	if cfg.IsTestMode, err = getEnvAsBool("COMPRESSION_IS_TEST_MODE", false); err != nil {
 		return nil, err
 	}
@@ -125,7 +138,6 @@ func LoadConfig() (*Config, error) {
 		return nil, err
 	}
 
-	cfg.CleanupSchedule = getEnv("CLEANUP_SCHEDULE", "")
 	if cfg.CleanupThreshold, err = getEnvAsDuration("CLEANUP_THRESHOLD", 30*24*time.Hour); err != nil {
 		return nil, err
 	}
@@ -133,12 +145,10 @@ func LoadConfig() (*Config, error) {
 		return nil, err
 	}
 
-	cfg.JanitorSchedule = getEnv("JANITOR_SCHEDULE", "")
 	if cfg.JanitorStuckThreshold, err = getEnvAsDuration("JANITOR_STUCK_THRESHOLD", 15*time.Minute); err != nil {
 		return nil, err
 	}
 
-	cfg.DeletionQueueSchedule = getEnv("DELETION_QUEUE_SCHEDULE", "")
 	if cfg.DeletionQueueBatchSize, err = getEnvAsInt("DELETION_QUEUE_BATCH_SIZE", 100); err != nil {
 		return nil, err
 	}
@@ -154,6 +164,10 @@ func LoadConfig() (*Config, error) {
 }
 
 func validateConfig(cfg *Config) error {
+	validAppModes := map[string]bool{"all": true, "compression": true, "cleanup": true, "janitor": true, "deletion": true}
+	if !validAppModes[strings.ToLower(cfg.AppMode)] {
+		return fmt.Errorf("APP_MODE tidak valid: '%s'. Gunakan salah satu dari: all, compression, cleanup, janitor, deletion", cfg.AppMode)
+	}
 	if cfg.BatchSize <= 0 {
 		return fmt.Errorf("BATCH_SIZE harus lebih besar dari 0")
 	}

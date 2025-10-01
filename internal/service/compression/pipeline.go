@@ -1,6 +1,7 @@
 package compression
 
 import (
+	"chrononews-scheduler/internal/config"
 	"chrononews-scheduler/internal/model"
 	"context"
 	"fmt"
@@ -34,7 +35,7 @@ type processResult struct {
 	err  error
 }
 
-func runConcurrentPipeline(ctx context.Context, tasks []model.File, cfg SchedulerConfig) {
+func runConcurrentPipeline(ctx context.Context, tasks []model.File, cfg *config.Config) {
 	readJobs := make(chan readJob, len(tasks))
 	processQueue := make(chan processJob, cfg.NumIOWorkers)
 	writeQueue := make(chan writeJob, cfg.NumCPUWorkers)
@@ -115,7 +116,7 @@ func readerWorker(ctx context.Context, jobs <-chan readJob, processQueue chan<- 
 	}
 }
 
-func processorWorker(ctx context.Context, processQueue <-chan processJob, writeQueue chan<- writeJob, wg *sync.WaitGroup, cfg SchedulerConfig) {
+func processorWorker(ctx context.Context, processQueue <-chan processJob, writeQueue chan<- writeJob, wg *sync.WaitGroup, cfg *config.Config) {
 	defer wg.Done()
 	for {
 		select {
@@ -176,6 +177,8 @@ func writerWorker(ctx context.Context, writeQueue <-chan writeJob, results chan<
 			if closeErr := outFile.Close(); err == nil && closeErr != nil {
 				err = closeErr
 			}
+			// Pastikan reader dari pipeline sebelumnya ditutup
+			job.reader.Close()
 
 			if err != nil {
 				results <- processResult{task: job.task, err: fmt.Errorf("writer: gagal menulis/menutup file: %w", err)}

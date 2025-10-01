@@ -1,6 +1,7 @@
 package compression
 
 import (
+	"chrononews-scheduler/internal/config"
 	"chrononews-scheduler/internal/database"
 	"chrononews-scheduler/internal/model"
 	"context"
@@ -13,20 +14,6 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
-
-type SchedulerConfig struct {
-	BatchSize     int
-	SourceDir     string
-	DestDir       string
-	IsConcurrent  bool
-	IsTestMode    bool
-	NumIOWorkers  int
-	NumCPUWorkers int
-	WebPQuality   int
-	MaxWidth      int
-	MaxHeight     int
-	MaxRetries    int
-}
 
 func monitorPeakRAM(p *process.Process, done <-chan struct{}) (peakRAM uint64) {
 	var currentPeakRAM uint64
@@ -62,7 +49,7 @@ func logResourceUsage(duration time.Duration, cpuTimeBefore, cpuTimeAfter float6
 	)
 }
 
-func RunScheduler(ctx context.Context, cfg SchedulerConfig) {
+func RunScheduler(ctx context.Context, cfg *config.Config) {
 	slog.Info("Scheduler dimulai.")
 	mode := "Sekuensial"
 	if cfg.IsConcurrent {
@@ -115,7 +102,7 @@ func RunScheduler(ctx context.Context, cfg SchedulerConfig) {
 	slog.Info("Scheduler selesai.")
 }
 
-func getTasksFromDB(ctx context.Context, cfg SchedulerConfig) []model.File {
+func getTasksFromDB(ctx context.Context, cfg *config.Config) []model.File {
 	var tasks []model.File
 
 	err := database.DB.Transaction(func(tx *gorm.DB) error {
