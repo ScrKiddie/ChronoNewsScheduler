@@ -1,17 +1,14 @@
 package compression
 
 import (
+	"chrononews-scheduler/internal/adapter"
 	"chrononews-scheduler/internal/config"
 	"chrononews-scheduler/internal/model"
 	"context"
-	"fmt"
-	"io"
 	"log/slog"
-	"os"
-	"path/filepath"
 )
 
-func runSequential(ctx context.Context, tasks []model.File, cfg *config.Config) {
+func runSequential(ctx context.Context, tasks []model.File, cfg *config.Config, storage *adapter.StorageAdapter) {
 	var successfulCount int
 	var failedCount int
 
@@ -28,9 +25,12 @@ func runSequential(ctx context.Context, tasks []model.File, cfg *config.Config) 
 		}
 
 		slog.Debug("Memproses file", "mode", "sekuensial", "file_name", task.Name)
-		err := compressImageStreaming(cfg, task)
+
+		err := ExecuteCompressionTask(ctx, cfg, task, storage)
+
 		if err != nil {
 			failedCount++
+			slog.Error("Gagal memproses file", "file", task.Name, "error", err)
 			handleFailure(task, err, cfg)
 		} else {
 			successfulCount++
@@ -42,34 +42,4 @@ func runSequential(ctx context.Context, tasks []model.File, cfg *config.Config) 
 		"berhasil", successfulCount,
 		"gagal", failedCount,
 	)
-}
-
-func compressImageStreaming(cfg *config.Config, task model.File) error {
-	sourceFile := filepath.Join(cfg.SourceDir, task.Name)
-	file, err := os.Open(sourceFile)
-	if err != nil {
-		return fmt.Errorf("gagal membuka file sumber: %w", err)
-	}
-	defer file.Close()
-
-	processedReader, err := processImageWithReader(file, cfg)
-	if err != nil {
-		return fmt.Errorf("gagal memproses gambar: %w", err)
-	}
-	defer processedReader.Close()
-
-	originalName := task.Name[:len(task.Name)-len(filepath.Ext(task.Name))]
-	newFileName := fmt.Sprintf("%s.webp", originalName)
-	outputFilePath := filepath.Join(cfg.DestDir, newFileName)
-
-	outFile, err := os.Create(outputFilePath)
-	if err != nil {
-		return fmt.Errorf("gagal membuat file tujuan: %w", err)
-	}
-	defer outFile.Close()
-
-	if _, err := io.Copy(outFile, processedReader); err != nil {
-		return fmt.Errorf("gagal menulis hasil ke file: %w", err)
-	}
-	return nil
 }

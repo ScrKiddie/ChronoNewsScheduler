@@ -1,6 +1,7 @@
 package compression
 
 import (
+	"chrononews-scheduler/internal/adapter"
 	"chrononews-scheduler/internal/config"
 	"chrononews-scheduler/internal/database"
 	"chrononews-scheduler/internal/model"
@@ -15,47 +16,18 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-func monitorPeakRAM(p *process.Process, done <-chan struct{}) (peakRAM uint64) {
-	var currentPeakRAM uint64
-	ticker := time.NewTicker(500 * time.Millisecond)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-done:
-			peakRAM = currentPeakRAM
-			return
-		case <-ticker.C:
-			memInfo, err := p.MemoryInfo()
-			if err == nil {
-				if memInfo.RSS > currentPeakRAM {
-					currentPeakRAM = memInfo.RSS
-				}
-			}
-		}
-	}
-}
-func logResourceUsage(duration time.Duration, cpuTimeBefore, cpuTimeAfter float64, peakRAM uint64) {
-	cpuTimeUsed := cpuTimeAfter - cpuTimeBefore
-	cpuPercent := 0.0
-	if duration.Seconds() > 0 {
-		cpuPercent = (cpuTimeUsed / duration.Seconds()) * 100.0
-	}
-
-	slog.Info("Metrik Kinerja Proses Selesai",
-		"total_duration", duration.String(),
-		"cpu_utilization_percent", fmt.Sprintf("%.2f%%", cpuPercent),
-		"peak_ram_mb", fmt.Sprintf("%.2f MB", float64(peakRAM)/1024/1024),
-	)
-}
-
-func RunScheduler(ctx context.Context, cfg *config.Config) {
+func RunScheduler(ctx context.Context, cfg *config.Config, storage *adapter.StorageAdapter) {
 	slog.Info("Scheduler dimulai.")
+
+	if cfg.IsTestMode {
+		slog.Warn("TEST MODE AKTIF: Hanya simulasi. File tidak disimpan & DB tidak diupdate. (Set LOG_LEVEL=debug untuk detail).")
+	}
+
 	mode := "Sekuensial"
 	if cfg.IsConcurrent {
-		mode = "Konkuren (Pipeline)"
+		mode = "Konkuren (Worker Pool)"
 	}
-	slog.Info("Detail eksekusi", "mode", mode, "batch_size", cfg.BatchSize)
+	slog.Info("Detail eksekusi", "mode", mode, "batch_size", cfg.BatchSize, "storage_mode", cfg.StorageMode)
 
 	tasks := getTasksFromDB(ctx, cfg)
 	if len(tasks) == 0 {
@@ -86,9 +58,9 @@ func RunScheduler(ctx context.Context, cfg *config.Config) {
 	}()
 
 	if cfg.IsConcurrent {
-		runConcurrentPipeline(ctx, tasks, cfg)
+		runWorkerPool(ctx, tasks, cfg, storage)
 	} else {
-		runSequential(ctx, tasks, cfg)
+		runSequential(ctx, tasks, cfg, storage)
 	}
 
 	close(doneMonitoring)
@@ -108,7 +80,7 @@ func getTasksFromDB(ctx context.Context, cfg *config.Config) []model.File {
 	err := database.DB.Transaction(func(tx *gorm.DB) error {
 		err := tx.Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"}).
 			WithContext(ctx).
-			Where("status = ? AND failed_attempts < ? AND used_by_post_id IS NOT NULL", "pending", cfg.MaxRetries).
+			Where("status = ? AND failed_attempts < ? AND (used_by_post_id IS NOT NULL OR used_by_user_id IS NOT NULL)", "pending", cfg.MaxRetries).
 			Limit(cfg.BatchSize).
 			Find(&tasks).Error
 
@@ -137,4 +109,39 @@ func getTasksFromDB(ctx context.Context, cfg *config.Config) []model.File {
 		return nil
 	}
 	return tasks
+}
+
+func monitorPeakRAM(p *process.Process, done <-chan struct{}) (peakRAM uint64) {
+	var currentPeakRAM uint64
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-done:
+			peakRAM = currentPeakRAM
+			return
+		case <-ticker.C:
+			memInfo, err := p.MemoryInfo()
+			if err == nil {
+				if memInfo.RSS > currentPeakRAM {
+					currentPeakRAM = memInfo.RSS
+				}
+			}
+		}
+	}
+}
+
+func logResourceUsage(duration time.Duration, cpuTimeBefore, cpuTimeAfter float64, peakRAM uint64) {
+	cpuTimeUsed := cpuTimeAfter - cpuTimeBefore
+	cpuPercent := 0.0
+	if duration.Seconds() > 0 {
+		cpuPercent = (cpuTimeUsed / duration.Seconds()) * 100.0
+	}
+
+	slog.Info("Metrik Kinerja Proses Selesai",
+		"total_duration", duration.String(),
+		"cpu_utilization_percent", fmt.Sprintf("%.2f%%", cpuPercent),
+		"peak_ram_mb", fmt.Sprintf("%.2f MB", float64(peakRAM)/1024/1024),
+	)
 }

@@ -10,6 +10,7 @@ type File struct {
 	FailedAttempts int     `gorm:"column:failed_attempts;default:0"`
 	LastError      *string `gorm:"column:last_error;type:varchar(255)"`
 	UsedByPostID   *int32  `gorm:"column:used_by_post_id;index"`
+	UsedByUserID   *int32  `gorm:"column:used_by_user_id;index"`
 }
 
 func (File) TableName() string {

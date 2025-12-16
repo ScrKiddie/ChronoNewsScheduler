@@ -14,17 +14,30 @@ import (
 const webpMaxDimension = 16383
 
 type Config struct {
-	DSN                     string
-	LogLevel                string
-	AppMode                 string
-	AppSchedule             string
-	IsConcurrent            bool
-	IsTestMode              bool
-	BatchSize               int
-	SourceDir               string
-	DestDir                 string
-	NumIOWorkers            int
-	NumCPUWorkers           int
+	DSN string
+
+	DBSSLMode string
+
+	LogLevel     string
+	AppMode      string
+	AppSchedule  string
+	IsConcurrent bool
+	IsTestMode   bool
+	BatchSize    int
+
+	DirAttachment string
+	DirProfile    string
+	DirThumbnail  string
+
+	NumWorkers int
+
+	StorageMode string
+	S3Bucket    string
+	S3Region    string
+	S3AccessKey string
+	S3SecretKey string
+	S3Endpoint  string
+
 	WebPQuality             int
 	MaxWidth                int
 	MaxHeight               int
@@ -71,7 +84,7 @@ func getEnvAsDuration(key string, fallback time.Duration) (time.Duration, error)
 	}
 	value, err := time.ParseDuration(strValue)
 	if err != nil {
-		return 0, fmt.Errorf("env var %s: invalid duration value '%s' (e.g., '720h', '30m')", key, strValue)
+		return 0, fmt.Errorf("env var %s: invalid duration value '%s'", key, strValue)
 	}
 	return value, nil
 }
@@ -82,29 +95,37 @@ func LoadConfig() (*Config, error) {
 	cfg := &Config{}
 	var err error
 
-	// --- Variabel Wajib Diisi ---
 	cfg.AppSchedule = getEnv("APP_SCHEDULE", "")
 	if cfg.AppSchedule == "" {
-		return nil, fmt.Errorf("environment variable wajib diisi: APP_SCHEDULE")
+		return nil, fmt.Errorf("APP_SCHEDULE wajib diisi")
 	}
 
-	cfg.SourceDir = getEnv("COMPRESSION_SOURCE_DIR", "")
-	if cfg.SourceDir == "" {
-		return nil, fmt.Errorf("environment variable wajib diisi: COMPRESSION_SOURCE_DIR")
+	cfg.DirAttachment = getEnv("DIR_ATTACHMENT", "post_picture")
+	cfg.DirProfile = getEnv("DIR_PROFILE", "profile_picture")
+	cfg.DirThumbnail = getEnv("DIR_THUMBNAIL", "thumbnail")
+
+	cfg.StorageMode = strings.ToLower(getEnv("STORAGE_MODE", "local"))
+	cfg.S3Bucket = getEnv("S3_BUCKET", "")
+	cfg.S3Region = getEnv("S3_REGION", "ap-southeast-1")
+	cfg.S3AccessKey = getEnv("S3_ACCESS_KEY", "")
+	cfg.S3SecretKey = getEnv("S3_SECRET_KEY", "")
+	cfg.S3Endpoint = getEnv("S3_ENDPOINT", "")
+
+	if cfg.StorageMode == "s3" {
+		if cfg.S3Bucket == "" || cfg.S3Region == "" || cfg.S3AccessKey == "" || cfg.S3SecretKey == "" {
+			return nil, fmt.Errorf("mode s3 aktif, wajib isi config S3 lengkap")
+		}
 	}
 
-	cfg.DestDir = getEnv("COMPRESSION_DEST_DIR", "")
-	if cfg.DestDir == "" {
-		return nil, fmt.Errorf("environment variable wajib diisi: COMPRESSION_DEST_DIR")
-	}
-	// --- Akhir Variabel Wajib Diisi ---
+	cfg.DBSSLMode = getEnv("DB_SSL_MODE", "disable")
 
-	cfg.DSN = fmt.Sprintf("host=%s user=%s password=%s dbname=%s port=%s sslmode=disable TimeZone=Asia/Jakarta",
+	cfg.DSN = fmt.Sprintf("host=%s user=%s password=%s dbname=%s port=%s sslmode=%s TimeZone=Asia/Jakarta lock_timeout=5000",
 		getEnv("DB_HOST", "localhost"),
 		getEnv("DB_USER", "user"),
 		getEnv("DB_PASSWORD", "password"),
 		getEnv("DB_NAME", "dbname"),
 		getEnv("DB_PORT", "5432"),
+		cfg.DBSSLMode,
 	)
 
 	cfg.LogLevel = getEnv("LOG_LEVEL", "info")
@@ -122,10 +143,7 @@ func LoadConfig() (*Config, error) {
 	if cfg.BatchSize, err = getEnvAsInt("COMPRESSION_BATCH_SIZE", 50); err != nil {
 		return nil, err
 	}
-	if cfg.NumIOWorkers, err = getEnvAsInt("COMPRESSION_NUM_IO_WORKERS", runtime.NumCPU()*2); err != nil {
-		return nil, err
-	}
-	if cfg.NumCPUWorkers, err = getEnvAsInt("COMPRESSION_NUM_CPU_WORKERS", runtime.NumCPU()); err != nil {
+	if cfg.NumWorkers, err = getEnvAsInt("COMPRESSION_NUM_WORKERS", runtime.NumCPU()); err != nil {
 		return nil, err
 	}
 	if cfg.WebPQuality, err = getEnvAsInt("COMPRESSION_WEBP_QUALITY", 75); err != nil {
@@ -144,11 +162,9 @@ func LoadConfig() (*Config, error) {
 	if cfg.CleanupBatchSize, err = getEnvAsInt("CLEANUP_BATCH_SIZE", 100); err != nil {
 		return nil, err
 	}
-
 	if cfg.JanitorStuckThreshold, err = getEnvAsDuration("JANITOR_STUCK_THRESHOLD", 15*time.Minute); err != nil {
 		return nil, err
 	}
-
 	if cfg.DeletionQueueBatchSize, err = getEnvAsInt("DELETION_QUEUE_BATCH_SIZE", 100); err != nil {
 		return nil, err
 	}
@@ -166,16 +182,13 @@ func LoadConfig() (*Config, error) {
 func validateConfig(cfg *Config) error {
 	validAppModes := map[string]bool{"all": true, "compression": true, "cleanup": true, "janitor": true, "deletion": true}
 	if !validAppModes[strings.ToLower(cfg.AppMode)] {
-		return fmt.Errorf("APP_MODE tidak valid: '%s'. Gunakan salah satu dari: all, compression, cleanup, janitor, deletion", cfg.AppMode)
+		return fmt.Errorf("APP_MODE tidak valid: '%s'", cfg.AppMode)
 	}
 	if cfg.BatchSize <= 0 {
-		return fmt.Errorf("BATCH_SIZE harus lebih besar dari 0")
+		return fmt.Errorf("BATCH_SIZE error")
 	}
-	if cfg.NumIOWorkers <= 0 {
-		return fmt.Errorf("NUM_IO_WORKERS harus lebih besar dari 0")
-	}
-	if cfg.NumCPUWorkers <= 0 {
-		return fmt.Errorf("NUM_CPU_WORKERS harus lebih besar dari 0")
+	if cfg.NumWorkers <= 0 {
+		return fmt.Errorf("NUM_WORKERS error")
 	}
 	if cfg.WebPQuality < 1 || cfg.WebPQuality > 100 {
 		return fmt.Errorf("WEBP_QUALITY harus di antara 1 dan 100")
@@ -186,40 +199,24 @@ func validateConfig(cfg *Config) error {
 	if cfg.MaxWidth > webpMaxDimension || cfg.MaxHeight > webpMaxDimension {
 		return fmt.Errorf("MAX_WIDTH atau MAX_HEIGHT melebihi batas WebP (%dpx)", webpMaxDimension)
 	}
-	if cfg.MaxRetries < 0 {
-		return fmt.Errorf("MAX_RETRIES tidak boleh negatif")
-	}
-	if cfg.CleanupThreshold <= 0 {
-		return fmt.Errorf("CLEANUP_THRESHOLD harus durasi positif")
-	}
-	if cfg.CleanupBatchSize <= 0 {
-		return fmt.Errorf("CLEANUP_BATCH_SIZE harus lebih besar dari 0")
-	}
-	if cfg.JanitorStuckThreshold <= 0 {
-		return fmt.Errorf("JANITOR_STUCK_THRESHOLD harus durasi positif")
-	}
-	if cfg.DeletionQueueBatchSize <= 0 {
-		return fmt.Errorf("DELETION_QUEUE_BATCH_SIZE harus lebih besar dari 0")
-	}
-	if cfg.DeletionQueueMaxRetries < 0 {
-		return fmt.Errorf("DELETION_QUEUE_MAX_RETRIES tidak boleh negatif")
-	}
 
-	for _, dir := range []string{cfg.SourceDir, cfg.DestDir} {
-		info, err := os.Stat(dir)
-		if os.IsNotExist(err) {
-			return fmt.Errorf("direktori '%s' tidak ditemukan", dir)
+	if cfg.StorageMode == "local" {
+		dirsToCheck := []string{cfg.DirAttachment, cfg.DirProfile, cfg.DirThumbnail}
+		for _, dir := range dirsToCheck {
+			if dir == "" || dir == "." {
+				continue
+			}
+			info, err := os.Stat(dir)
+			if os.IsNotExist(err) {
+				if err := os.MkdirAll(dir, 0755); err != nil {
+					return fmt.Errorf("gagal membuat folder '%s'", dir)
+				}
+			} else if err != nil {
+				return err
+			} else if !info.IsDir() {
+				return fmt.Errorf("path '%s' bukan folder", dir)
+			}
 		}
-		if err != nil {
-			return fmt.Errorf("gagal memeriksa direktori '%s': %w", dir, err)
-		}
-		if !info.IsDir() {
-			return fmt.Errorf("path '%s' bukanlah sebuah direktori", dir)
-		}
-	}
-	validLogLevels := map[string]bool{"DEBUG": true, "INFO": true, "WARN": true, "ERROR": true}
-	if !validLogLevels[strings.ToUpper(cfg.LogLevel)] {
-		return fmt.Errorf("LOG_LEVEL tidak valid: '%s'. Gunakan salah satu dari: debug, info, warn, error", cfg.LogLevel)
 	}
 	return nil
 }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"chrononews-scheduler/internal/adapter"
 	"chrononews-scheduler/internal/config"
 	"chrononews-scheduler/internal/database"
 	"chrononews-scheduler/internal/service"
@@ -13,6 +14,11 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	awsConfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 
 	"github.com/robfig/cron/v3"
 )
@@ -32,7 +38,7 @@ func parseLogLevel(levelStr string) slog.Level {
 	}
 }
 
-func runServices(appCfg *config.Config, jobCtx context.Context) {
+func runServices(appCfg *config.Config, jobCtx context.Context, storage *adapter.StorageAdapter) {
 	mode := strings.ToLower(appCfg.AppMode)
 	slog.Info("Cron job terpicu.", "mode", mode)
 
@@ -46,7 +52,7 @@ func runServices(appCfg *config.Config, jobCtx context.Context) {
 
 	if runAll || mode == "compression" {
 		slog.Info("Memulai service: Compression")
-		compression.RunScheduler(jobCtx, appCfg)
+		compression.RunScheduler(jobCtx, appCfg, storage)
 		slog.Info("Service Compression selesai.")
 	}
 
@@ -55,6 +61,7 @@ func runServices(appCfg *config.Config, jobCtx context.Context) {
 		service.ProcessDeletionQueue(
 			appCfg.DeletionQueueBatchSize,
 			appCfg.DeletionQueueMaxRetries,
+			storage,
 		)
 		slog.Info("Service Deletion Queue selesai.")
 	}
@@ -62,13 +69,13 @@ func runServices(appCfg *config.Config, jobCtx context.Context) {
 	if runAll || mode == "cleanup" {
 		slog.Info("Memulai service: Cleanup Orphaned Files")
 		service.CleanupOrphanedFiles(
-			appCfg.DestDir,
-			appCfg.CleanupThreshold,
+			appCfg,
 			appCfg.CleanupBatchSize,
+			storage,
 		)
 		slog.Info("Service Cleanup Orphaned Files selesai.")
 	}
-	slog.Info("Semua service yang dijadwalkan telah selesai dieksekusi.")
+	slog.Info("Semua service selesai.")
 }
 
 func main() {
@@ -84,11 +91,42 @@ func main() {
 
 	database.ConnectDB(appCfg.DSN)
 
-	slog.Info("Aplikasi dimulai dengan konfigurasi dari environment variables",
+	slog.Info("Aplikasi dimulai",
 		slog.String("schedule", appCfg.AppSchedule),
 		slog.String("mode", appCfg.AppMode),
-		slog.String("log_level", appCfg.LogLevel),
+		slog.String("storage", appCfg.StorageMode),
 	)
+
+	var s3Client *s3.Client
+	if appCfg.StorageMode == "s3" {
+		slog.Info("Menginisialisasi AWS S3 Client...")
+
+		cfg, err := awsConfig.LoadDefaultConfig(context.TODO(),
+			awsConfig.WithRegion(appCfg.S3Region),
+			awsConfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(
+				appCfg.S3AccessKey,
+				appCfg.S3SecretKey,
+				"",
+			)),
+		)
+		if err != nil {
+			log.Fatalf("Gagal load config AWS: %v", err)
+		}
+
+		if appCfg.S3Endpoint != "" {
+			s3Client = s3.NewFromConfig(cfg, func(o *s3.Options) {
+				o.BaseEndpoint = aws.String(appCfg.S3Endpoint)
+				o.UsePathStyle = true
+				o.RequestChecksumCalculation = aws.RequestChecksumCalculationWhenRequired
+				o.ResponseChecksumValidation = aws.ResponseChecksumValidationWhenRequired
+			})
+		} else {
+			s3Client = s3.NewFromConfig(cfg)
+		}
+
+	}
+
+	storageAdapter := adapter.NewStorageAdapter(appCfg, s3Client)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -97,10 +135,10 @@ func main() {
 	_, err = c.AddFunc(appCfg.AppSchedule, func() {
 		jobCtx, jobCancel := context.WithTimeout(ctx, 30*time.Minute)
 		defer jobCancel()
-		runServices(appCfg, jobCtx)
+		runServices(appCfg, jobCtx, storageAdapter)
 	})
 	if err != nil {
-		slog.Error("Tidak dapat menambahkan cron job utama", "error", err)
+		slog.Error("Gagal menambahkan cron job", "error", err)
 		os.Exit(1)
 	}
 
