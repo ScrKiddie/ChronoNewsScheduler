@@ -15,60 +15,58 @@ import (
 )
 
 func CleanupOrphanedFiles(cfg *config.Config, batchSize int, storage *adapter.StorageAdapter) {
-	slog.Info("Memulai tugas pembersihan file yatim...")
+	slog.Info("Memulai tugas pembersihan orphaned file...")
 
 	thresholdTime := time.Now().Add(-cfg.CleanupThreshold)
 	unixThreshold := thresholdTime.Unix()
 
 	var orphanedFiles []model.File
-	err := database.DB.Transaction(func(tx *gorm.DB) error {
-		err := tx.Where("used_by_post_id IS NULL AND used_by_user_id IS NULL AND created_at < ?", unixThreshold).
-			Limit(batchSize).
-			Find(&orphanedFiles).Error
-		if err != nil {
-			return err
-		}
-
-		if len(orphanedFiles) == 0 {
-			return nil
-		}
-		slog.Info(fmt.Sprintf("Ditemukan %d file yatim.", len(orphanedFiles)))
-
-		var idsToDeleteFromDB []int32
-		for _, file := range orphanedFiles {
-			var folder string
-			switch file.Type {
-			case constant.FileTypeAttachment:
-				folder = cfg.DirAttachment
-			case constant.FileTypeProfile:
-				folder = cfg.DirProfile
-			case constant.FileTypeThumbnail:
-				folder = cfg.DirThumbnail
-			default:
-				folder = cfg.DirAttachment
-			}
-
-			filePath := filepath.Join(folder, file.Name)
-
-			err := storage.Delete(filePath)
-
-			if err == nil {
-				idsToDeleteFromDB = append(idsToDeleteFromDB, file.ID)
-			} else {
-				slog.Error("Gagal hapus file storage", "path", filePath, "error", err)
-			}
-		}
-
-		if len(idsToDeleteFromDB) > 0 {
-			if err := tx.Where("id IN ?", idsToDeleteFromDB).Delete(&model.File{}).Error; err != nil {
-				return err
-			}
-		}
-		return nil
-	})
+	err := database.DB.Where("used_by_post_id IS NULL AND used_by_user_id IS NULL AND created_at < ?", unixThreshold).
+		Limit(batchSize).
+		Find(&orphanedFiles).Error
 
 	if err != nil {
-		slog.Error("Cleanup gagal", "error", err)
+		slog.Error("Gagal mengambil data orphaned file", "error", err)
+		return
+	}
+
+	if len(orphanedFiles) == 0 {
+		return
+	}
+	slog.Info(fmt.Sprintf("Ditemukan %d orphaned file.", len(orphanedFiles)))
+
+	var idsToDeleteFromDB []int32
+	for _, file := range orphanedFiles {
+		var folder string
+		switch file.Type {
+		case constant.FileTypeAttachment:
+			folder = cfg.DirAttachment
+		case constant.FileTypeProfile:
+			folder = cfg.DirProfile
+		case constant.FileTypeThumbnail:
+			folder = cfg.DirThumbnail
+		default:
+			folder = cfg.DirAttachment
+		}
+
+		filePath := filepath.Join(folder, file.Name)
+
+		err := storage.Delete(filePath)
+
+		if err == nil {
+			idsToDeleteFromDB = append(idsToDeleteFromDB, file.ID)
+		} else {
+			slog.Error("Gagal hapus file storage", "path", filePath, "error", err)
+		}
+	}
+
+	if len(idsToDeleteFromDB) > 0 {
+		err := database.DB.Transaction(func(tx *gorm.DB) error {
+			return tx.Where("id IN ?", idsToDeleteFromDB).Delete(&model.File{}).Error
+		})
+		if err != nil {
+			slog.Error("Cleanup gagal pada tahap DB", "error", err)
+		}
 	}
 }
 
